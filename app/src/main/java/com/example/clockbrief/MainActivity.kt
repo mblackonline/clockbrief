@@ -11,12 +11,18 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +47,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var clockTime by mutableStateOf("")
+    private var clockDate by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,11 +57,13 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
 
         clockTime = formattedTime()
+        clockDate = formattedDate()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
-                    // Read the system clock each time so time and timezone changes are reflected.
+                    // Read the system clock each time so time, date, and timezone changes are reflected.
                     clockTime = formattedTime()
+                    clockDate = formattedDate()
                     delay(1_000)
                 }
             }
@@ -62,7 +71,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ClockBriefTheme(darkTheme = true, dynamicColor = false) {
-                ClockScreen(time = clockTime)
+                ClockScreen(time = clockTime, date = clockDate)
             }
         }
     }
@@ -83,10 +92,13 @@ class MainActivity : ComponentActivity() {
 
     private fun formattedTime(): String =
         DateFormat.getTimeFormat(this).format(System.currentTimeMillis())
+
+    private fun formattedDate(): String =
+        LocalDate.now().format(DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()))
 }
 
 @Composable
-private fun ClockScreen(time: String, modifier: Modifier = Modifier) {
+private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -95,22 +107,46 @@ private fun ClockScreen(time: String, modifier: Modifier = Modifier) {
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
-        BasicText(
-            text = time,
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            style = TextStyle(
-                color = Color.White,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Light,
-                textAlign = TextAlign.Center
-            ),
-            maxLines = 1,
-            softWrap = false,
-            autoSize = TextAutoSize.StepBased(
-                minFontSize = 32.sp,
-                maxFontSize = 320.sp
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            BasicText(
+                text = time,
+                modifier = Modifier.fillMaxWidth(),
+                style = TextStyle(
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Light,
+                    textAlign = TextAlign.Center
+                ),
+                maxLines = 1,
+                softWrap = false,
+                autoSize = TextAutoSize.StepBased(
+                    minFontSize = 32.sp,
+                    maxFontSize = 260.sp
+                )
             )
-        )
+            if (date.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                BasicText(
+                    text = date,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = TextStyle(
+                        color = Color(0xFFB0B0B0),
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Normal,
+                        textAlign = TextAlign.Center
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                    autoSize = TextAutoSize.StepBased(
+                        minFontSize = 16.sp,
+                        maxFontSize = 52.sp
+                    )
+                )
+            }
+        }
     }
 }
 
@@ -118,6 +154,6 @@ private fun ClockScreen(time: String, modifier: Modifier = Modifier) {
 @Composable
 private fun ClockPreview() {
     ClockBriefTheme(darkTheme = true, dynamicColor = false) {
-        ClockScreen(time = "10:08 PM")
+        ClockScreen(time = "10:08 PM", date = "Wed, Sep 9")
     }
 }
