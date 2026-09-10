@@ -45,6 +45,7 @@ import com.example.clockbrief.data.LocationPreferences
 import com.example.clockbrief.data.SavedLocation
 import com.example.clockbrief.data.WeatherData
 import com.example.clockbrief.data.WeatherRepository
+import com.example.clockbrief.service.ClockAssistantSession
 import com.example.clockbrief.ui.LocationSettingsDialog
 import com.example.clockbrief.ui.theme.ClockBriefTheme
 import kotlinx.coroutines.delay
@@ -140,9 +141,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        ClockAssistantSession.policy.onClockFocusChanged(hasFocus)
         if (hasFocus) {
             hideSystemBars()
         }
+    }
+
+    override fun onDestroy() {
+        ClockAssistantSession.policy.cancelSession()
+        super.onDestroy()
     }
 
     private fun hideSystemBars() {
