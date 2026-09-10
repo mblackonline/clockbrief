@@ -72,7 +72,7 @@ fun LocationSettingsDialog(
                             errorMessage = null
                         },
                         label = { Text("City name") },
-                        placeholder = { Text("e.g. Sample City") },
+                        placeholder = { Text("e.g. City, State or Country") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
