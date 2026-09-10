@@ -116,15 +116,17 @@ private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifie
                 modifier = Modifier.fillMaxWidth(),
                 style = TextStyle(
                     color = Color.White,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = FontFamily.SansSerif,
                     fontWeight = FontWeight.Light,
+                    fontFeatureSettings = "tnum",
+                    letterSpacing = (-2).sp,
                     textAlign = TextAlign.Center
                 ),
                 maxLines = 1,
                 softWrap = false,
                 autoSize = TextAutoSize.StepBased(
                     minFontSize = 32.sp,
-                    maxFontSize = 260.sp
+                    maxFontSize = 210.sp
                 )
             )
             if (date.isNotEmpty()) {
