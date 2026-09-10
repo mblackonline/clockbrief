@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">ClockBrief</string>
+    <string name="accessibility_service_description">Automatically dismisses assistant overlays and returns to the clock.</string>
 </resources>
