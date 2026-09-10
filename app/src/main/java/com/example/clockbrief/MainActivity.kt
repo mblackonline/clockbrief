@@ -6,10 +6,8 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -18,14 +16,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,17 +35,34 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.clockbrief.data.LocationPreferences
+import com.example.clockbrief.data.SavedLocation
+import com.example.clockbrief.data.WeatherData
+import com.example.clockbrief.data.WeatherRepository
+import com.example.clockbrief.ui.LocationSettingsDialog
 import com.example.clockbrief.ui.theme.ClockBriefTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private var clockTime by mutableStateOf("")
     private var clockDate by mutableStateOf("")
+    private var currentLocation by mutableStateOf<SavedLocation?>(null)
+    private var weatherData by mutableStateOf<WeatherData?>(null)
+    private var isSettingsOpen by mutableStateOf(false)
+
+    private val locationPreferences by lazy { LocationPreferences(this) }
+    private val weatherRepository = WeatherRepository()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,12 +71,15 @@ class MainActivity : ComponentActivity() {
 
         hideSystemBars()
 
+        currentLocation = locationPreferences.getLocation()
+
         clockTime = formattedTime()
         clockDate = formattedDate()
+
+        // Update clock every second
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
-                    // Read the system clock each time so time, date, and timezone changes are reflected.
                     clockTime = formattedTime()
                     clockDate = formattedDate()
                     delay(1_000)
@@ -69,10 +87,54 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Poll weather every 15 minutes while app is started
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    val location = currentLocation
+                    if (location != null) {
+                        fetchWeatherFor(location)
+                    }
+                    delay(15 * 60 * 1_000L)
+                }
+            }
+        }
+
         setContent {
             ClockBriefTheme(darkTheme = true, dynamicColor = false) {
-                ClockScreen(time = clockTime, date = clockDate)
+                ClockScreen(
+                    time = clockTime,
+                    date = clockDate,
+                    weather = weatherData,
+                    location = currentLocation,
+                    onOpenSettings = { isSettingsOpen = true }
+                )
+
+                if (isSettingsOpen) {
+                    LocationSettingsDialog(
+                        currentLocation = currentLocation,
+                        onLocationSelected = { newLocation ->
+                            currentLocation = newLocation
+                            locationPreferences.saveLocation(newLocation)
+                            isSettingsOpen = false
+                            lifecycleScope.launch {
+                                fetchWeatherFor(newLocation)
+                            }
+                        },
+                        onDismiss = {
+                            isSettingsOpen = false
+                            hideSystemBars()
+                        }
+                    )
+                }
             }
+        }
+    }
+
+    private suspend fun fetchWeatherFor(location: SavedLocation) {
+        val result = weatherRepository.fetchWeather(location.latitude, location.longitude)
+        result.onSuccess { data ->
+            weatherData = data
         }
     }
 
@@ -98,17 +160,41 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifier) {
+private fun ClockScreen(
+    time: String,
+    date: String,
+    weather: WeatherData?,
+    location: SavedLocation?,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
             .safeDrawingPadding()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
+            .padding(24.dp)
     ) {
+        // Gear / Settings trigger in top right corner
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(48.dp)
+                .clickable(onClick = onOpenSettings),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "⚙",
+                color = Color(0x55FFFFFF),
+                fontSize = 22.sp
+            )
+        }
+
+        // Centered Time, Date, and Weather
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             BasicText(
@@ -129,6 +215,7 @@ private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifie
                     maxFontSize = 210.sp
                 )
             )
+
             if (date.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 BasicText(
@@ -144,8 +231,44 @@ private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifie
                     softWrap = false,
                     autoSize = TextAutoSize.StepBased(
                         minFontSize = 16.sp,
-                        maxFontSize = 52.sp
+                        maxFontSize = 46.sp
                     )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (weather != null) {
+                val weatherLine = buildString {
+                    append("${weather.currentTempF}°")
+                    append(" · ")
+                    append(weather.condition)
+                    if (weather.highTempF != null && weather.lowTempF != null) {
+                        append("  (${weather.highTempF}° / ${weather.lowTempF}°)")
+                    }
+                }
+                BasicText(
+                    text = weatherLine,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = TextStyle(
+                        color = Color(0xFF909090),
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Normal,
+                        textAlign = TextAlign.Center
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                    autoSize = TextAutoSize.StepBased(
+                        minFontSize = 14.sp,
+                        maxFontSize = 36.sp
+                    )
+                )
+            } else if (location == null) {
+                Text(
+                    text = "Tap ⚙ to set weather location",
+                    color = Color(0x66FFFFFF),
+                    fontSize = 16.sp,
+                    modifier = Modifier.clickable(onClick = onOpenSettings)
                 )
             }
         }
@@ -156,6 +279,18 @@ private fun ClockScreen(time: String, date: String, modifier: Modifier = Modifie
 @Composable
 private fun ClockPreview() {
     ClockBriefTheme(darkTheme = true, dynamicColor = false) {
-        ClockScreen(time = "10:08 PM", date = "Wed, Sep 9")
+        ClockScreen(
+            time = "10:08 PM",
+            date = "Wed, Sep 9",
+            weather = WeatherData(
+                currentTempF = 72,
+                condition = "Partly Cloudy",
+                highTempF = 78,
+                lowTempF = 58,
+                lastUpdated = "10:00 PM"
+            ),
+            location = SavedLocation("Sample City", 40.7128, -74.0060),
+            onOpenSettings = {}
+        )
     }
 }
