@@ -14,6 +14,7 @@ This software was developed with the assistance of AI tools.
 - Weather refresh every five minutes while the app is visible, with an immediate refresh on return
 - Last successful update age and automatic retries when weather is unavailable
 - In-app city search with private, local on-device preference storage
+- Saved location preferences excluded from Android cloud backup and device transfer
 - Display kept awake continuously while foregrounded
 - Optional accessibility service to automatically dismiss assistant overlays after 30 seconds
 
