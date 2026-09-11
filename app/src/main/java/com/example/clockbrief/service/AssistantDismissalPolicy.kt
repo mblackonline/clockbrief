@@ -1,51 +1,58 @@
 package com.example.clockbrief.service
 
-/** Main-thread session state shared by the activity and accessibility service. */
+/** Main-thread state shared by the clock activity and accessibility service. */
 internal object ClockAssistantSession {
     val policy = AssistantDismissalPolicy()
 }
 
+/** Tracks a foreground app over time, independent of accessibility event/window IDs. */
 internal class AssistantDismissalPolicy {
     companion object {
         const val CLOCK_PACKAGE = "com.example.clockbrief"
         const val ASSISTANT_PACKAGE = "com.google.android.googlequicksearchbox"
-        // Confirmed on the test tablet. Unknown assistant surfaces fail closed.
-        const val ASSISTANT_ACTIVITY =
-            "com.google.android.apps.search.assistant.surfaces.voice.ui.host.activity.defaultactivity.FragmentHostDefaultActivity"
+        const val DISMISS_AFTER_MS = 30_000L
     }
 
     private var clockHasFocus = false
     private var sessionAvailable = false
-    private var armed = false
+    private var assistantStartedAt: Long? = null
+    val isCountingDown: Boolean get() = assistantStartedAt != null
 
     fun onClockFocusChanged(hasFocus: Boolean) {
         clockHasFocus = hasFocus
         if (hasFocus) {
             sessionAvailable = true
-            armed = false
+            assistantStartedAt = null
         }
     }
 
-    fun onWindowChanged(packageName: String?, className: String?): Boolean {
-        armed = false
-        if (packageName == CLOCK_PACKAGE) return false
-        if (packageName != ASSISTANT_PACKAGE || className != ASSISTANT_ACTIVITY) {
+    /** Called with the currently focused window's owner, never an event's sender. */
+    fun observeFocusedPackage(packageName: String?, elapsedMillis: Long): Boolean {
+        if (clockHasFocus || packageName == CLOCK_PACKAGE) {
+            if (packageName == CLOCK_PACKAGE || clockHasFocus) sessionAvailable = true
+            assistantStartedAt = null
+            return false
+        }
+        // Missing metadata and temporary system surfaces cannot trigger Back.
+        if (packageName == null || packageName == "com.android.systemui") return false
+        if (packageName != ASSISTANT_PACKAGE) {
             cancelSession()
             return false
         }
-        armed = sessionAvailable && !clockHasFocus
-        return armed
-    }
-
-    /** Consume before sending Back so dismissal events cannot arm a second action. */
-    fun consumeDismissal(): Boolean {
-        val allowed = armed && sessionAvailable && !clockHasFocus
+        if (!sessionAvailable) return false
+        val startedAt = assistantStartedAt
+        if (startedAt == null) {
+            assistantStartedAt = elapsedMillis
+            return false
+        }
+        if (elapsedMillis - startedAt < DISMISS_AFTER_MS) return false
+        // Consume before Back: the same session can never dispatch it twice.
         cancelSession()
-        return allowed
+        return true
     }
 
     fun cancelSession() {
-        armed = false
         sessionAvailable = false
+        assistantStartedAt = null
     }
 }

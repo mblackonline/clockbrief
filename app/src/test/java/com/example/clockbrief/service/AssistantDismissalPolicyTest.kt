@@ -6,77 +6,98 @@ import org.junit.Test
 
 class AssistantDismissalPolicyTest {
     private val policy = AssistantDismissalPolicy()
-
-    private fun openAssistant(): Boolean = policy.onWindowChanged(
-        AssistantDismissalPolicy.ASSISTANT_PACKAGE,
-        AssistantDismissalPolicy.ASSISTANT_ACTIVITY
-    )
+    private val assistant = AssistantDismissalPolicy.ASSISTANT_PACKAGE
+    private val clock = AssistantDismissalPolicy.CLOCK_PACKAGE
 
     private fun leaveClock() {
         policy.onClockFocusChanged(true)
         policy.onClockFocusChanged(false)
     }
 
-    @Test fun assistantOpenedOverClockCanDismissOnlyOnce() {
+    @Test fun dismissesAtThirtySecondsWithoutAnyAccessibilityEvents() {
         leaveClock()
-        assertTrue(openAssistant())
-        assertTrue(policy.consumeDismissal())
-        assertFalse(openAssistant())
-        assertFalse(policy.consumeDismissal())
+        assertFalse(policy.observeFocusedPackage(assistant, 0))
+        assertFalse(policy.observeFocusedPackage(assistant, 29_999))
+        assertTrue(policy.observeFocusedPackage(assistant, 30_000))
     }
 
-    @Test fun clockRegainingFocusBlocksBackEvenWithoutAccessibilityEvent() {
+    @Test fun assistantWindowReplacementDoesNotRestartOrCancelTimer() {
         leaveClock()
-        assertTrue(openAssistant())
+        // Voice window 481 and activity window 484 have the same live owner.
+        assertFalse(policy.observeFocusedPackage(assistant, 0))
+        assertFalse(policy.observeFocusedPackage(assistant, 4_000))
+        assertTrue(policy.observeFocusedPackage(assistant, 30_000))
+    }
+
+    @Test fun sameSessionCannotDismissAgainEvenIfAssistantRemainsVisible() {
+        leaveClock()
+        policy.observeFocusedPackage(assistant, 0)
+        assertTrue(policy.observeFocusedPackage(assistant, 30_000))
+        assertFalse(policy.observeFocusedPackage(assistant, 60_000))
+        assertFalse(policy.observeFocusedPackage(assistant, 90_000))
+    }
+
+    @Test fun clockRegainingFocusPreventsBackWithoutAWindowEvent() {
+        leaveClock()
+        policy.observeFocusedPackage(assistant, 0)
         policy.onClockFocusChanged(true)
-        assertFalse(policy.consumeDismissal())
+        assertFalse(policy.observeFocusedPackage(assistant, 30_000))
     }
 
-    @Test fun assistantCannotArmWhileClockHasFocus() {
-        policy.onClockFocusChanged(true)
-        assertFalse(openAssistant())
-        assertFalse(policy.consumeDismissal())
-    }
-
-    @Test fun assistantOpenedWithoutClockSessionCannotDismiss() {
-        assertFalse(openAssistant())
-        assertFalse(policy.consumeDismissal())
-    }
-
-    @Test fun switchingToAnotherAppCancelsSession() {
+    @Test fun clockObservedAtDeadlinePreventsBack() {
         leaveClock()
-        assertTrue(openAssistant())
-        assertFalse(policy.onWindowChanged("com.android.settings", "Settings"))
-        assertFalse(policy.consumeDismissal())
-        assertFalse(openAssistant())
+        policy.observeFocusedPackage(assistant, 0)
+        assertFalse(policy.observeFocusedPackage(clock, 30_000))
     }
 
-    @Test fun otherGoogleScreensCannotArmDismissal() {
+    @Test fun otherForegroundAppCancelsSession() {
         leaveClock()
-        assertFalse(policy.onWindowChanged(AssistantDismissalPolicy.ASSISTANT_PACKAGE, "SearchActivity"))
-        assertFalse(policy.consumeDismissal())
+        policy.observeFocusedPackage(assistant, 0)
+        assertFalse(policy.observeFocusedPackage("com.android.settings", 5_000))
+        assertFalse(policy.observeFocusedPackage(assistant, 30_000))
     }
 
-    @Test fun unknownWindowCancelsPendingDismissal() {
+    @Test fun actualLauncherFocusCancelsSession() {
         leaveClock()
-        assertTrue(openAssistant())
-        assertFalse(policy.onWindowChanged(null, null))
-        assertFalse(policy.consumeDismissal())
+        policy.observeFocusedPackage(assistant, 0)
+        assertFalse(policy.observeFocusedPackage("com.sec.android.app.launcher", 5_000))
+        assertFalse(policy.observeFocusedPackage(assistant, 30_000))
     }
 
-    @Test fun returningToClockAllowsANewAssistantSession() {
-        leaveClock()
-        assertTrue(openAssistant())
-        assertTrue(policy.consumeDismissal())
-        leaveClock()
-        assertTrue(openAssistant())
-        assertTrue(policy.consumeDismissal())
+    @Test fun assistantOpenedWithoutClockDoesNotDismiss() {
+        policy.observeFocusedPackage(assistant, 0)
+        assertFalse(policy.observeFocusedPackage(assistant, 30_000))
     }
 
-    @Test fun serviceInterruptionOrActivityDestructionCancelsDismissal() {
+    @Test fun temporarySystemUiDoesNotEraseSessionButCannotReceiveBack() {
         leaveClock()
-        assertTrue(openAssistant())
+        assertFalse(policy.observeFocusedPackage("com.android.systemui", 0))
+        policy.observeFocusedPackage(assistant, 1_000)
+        assertFalse(policy.observeFocusedPackage("com.android.systemui", 31_000))
+        assertTrue(policy.observeFocusedPackage(assistant, 32_000))
+    }
+
+    @Test fun missingMetadataCannotReceiveBack() {
+        leaveClock()
+        policy.observeFocusedPackage(assistant, 0)
+        assertFalse(policy.observeFocusedPackage(null, 30_000))
+        assertTrue(policy.observeFocusedPackage(assistant, 31_000))
+    }
+
+    @Test fun returningToClockAllowsANewSessionWithItsOwnDeadline() {
+        leaveClock()
+        policy.observeFocusedPackage(assistant, 0)
+        assertTrue(policy.observeFocusedPackage(assistant, 30_000))
+        policy.observeFocusedPackage(clock, 31_000)
+        policy.observeFocusedPackage(assistant, 40_000)
+        assertFalse(policy.observeFocusedPackage(assistant, 69_999))
+        assertTrue(policy.observeFocusedPackage(assistant, 70_000))
+    }
+
+    @Test fun interruptOrDestroyCancelsPendingDismissal() {
+        leaveClock()
+        policy.observeFocusedPackage(assistant, 0)
         policy.cancelSession()
-        assertFalse(policy.consumeDismissal())
+        assertFalse(policy.observeFocusedPackage(assistant, 30_000))
     }
 }
