@@ -27,10 +27,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.clockbrief.data.GeocodingResult
 import com.example.clockbrief.data.SavedLocation
 import com.example.clockbrief.data.WeatherRepository
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 @Composable
 fun LocationSettingsDialog(
@@ -39,10 +41,12 @@ fun LocationSettingsDialog(
     onDismiss: () -> Unit,
     weatherRepository: WeatherRepository = remember { WeatherRepository() }
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var isSearching by remember { mutableStateOf(false) }
-    var searchResults by remember { mutableStateOf<List<GeocodingResult>>(emptyList()) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var searchState by remember { mutableStateOf(CitySearchState()) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    val searchQuery = searchState.query
+    val isSearching = searchState.isSearching
+    val searchResults = searchState.results
+    val errorMessage = searchState.error
     val coroutineScope = rememberCoroutineScope()
 
     AlertDialog(
@@ -68,8 +72,8 @@ fun LocationSettingsDialog(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = {
-                            searchQuery = it
-                            errorMessage = null
+                            searchJob?.cancel()
+                            searchState = searchState.editQuery(it)
                         },
                         label = { Text("City name") },
                         placeholder = { Text("e.g. City, State or Country") },
@@ -80,20 +84,14 @@ fun LocationSettingsDialog(
                     Button(
                         onClick = {
                             if (searchQuery.isNotBlank()) {
-                                isSearching = true
-                                errorMessage = null
-                                coroutineScope.launch {
-                                    val result = weatherRepository.searchCity(searchQuery)
-                                    isSearching = false
-                                    result.onSuccess { list ->
-                                        if (list.isEmpty()) {
-                                            errorMessage = "No matching locations found."
-                                        } else {
-                                            searchResults = list
-                                        }
-                                    }.onFailure {
-                                        errorMessage = "Failed to search location: ${it.message}"
-                                    }
+                                searchJob?.cancel()
+                                searchState = searchState.startSearch()
+                                val requestVersion = searchState.requestVersion
+                                val query = searchState.query
+                                searchJob = coroutineScope.launch {
+                                    val result = weatherRepository.searchCity(query)
+                                    currentCoroutineContext().ensureActive()
+                                    searchState = searchState.finishSearch(requestVersion, result)
                                 }
                             }
                         },
