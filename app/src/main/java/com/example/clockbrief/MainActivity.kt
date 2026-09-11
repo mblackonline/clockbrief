@@ -2,6 +2,7 @@ package com.example.clockbrief
 
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,9 +22,9 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +46,7 @@ import com.example.clockbrief.data.LocationPreferences
 import com.example.clockbrief.data.SavedLocation
 import com.example.clockbrief.data.WeatherData
 import com.example.clockbrief.data.WeatherRepository
+import com.example.clockbrief.data.WeatherRefreshController
 import com.example.clockbrief.service.ClockAssistantSession
 import com.example.clockbrief.ui.LocationSettingsDialog
 import com.example.clockbrief.ui.theme.ClockBriefTheme
@@ -59,11 +61,15 @@ class MainActivity : ComponentActivity() {
     private var clockTime by mutableStateOf("")
     private var clockDate by mutableStateOf("")
     private var currentLocation by mutableStateOf<SavedLocation?>(null)
-    private var weatherData by mutableStateOf<WeatherData?>(null)
+    private var nowMillis by mutableStateOf(System.currentTimeMillis())
     private var isSettingsOpen by mutableStateOf(false)
 
     private val locationPreferences by lazy { LocationPreferences(this) }
     private val weatherRepository = WeatherRepository()
+    private val weatherController = WeatherRefreshController(
+        fetchWeather = { location -> weatherRepository.fetchWeather(location.latitude, location.longitude) },
+        log = { message -> Log.d("ClockBriefWeather", message) }
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +79,7 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
 
         currentLocation = locationPreferences.getLocation()
+        weatherController.selectLocation(currentLocation)
 
         clockTime = formattedTime()
         clockDate = formattedDate()
@@ -81,6 +88,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (isActive) {
+                    nowMillis = System.currentTimeMillis()
                     clockTime = formattedTime()
                     clockDate = formattedDate()
                     delay(1_000)
@@ -88,25 +96,21 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Poll weather every 15 minutes while app is started
+        // One polling owner; restarts immediately on return and on location changes.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (isActive) {
-                    val location = currentLocation
-                    if (location != null) {
-                        fetchWeatherFor(location)
-                    }
-                    delay(15 * 60 * 1_000L)
-                }
+                weatherController.runWhileStarted()
             }
         }
 
         setContent {
+            val weatherState by weatherController.state.collectAsState()
             ClockBriefTheme(darkTheme = true, dynamicColor = false) {
                 ClockScreen(
                     time = clockTime,
                     date = clockDate,
-                    weather = weatherData,
+                    weather = weatherState.weather,
+                    weatherStatus = weatherState.statusText(nowMillis),
                     location = currentLocation,
                     onOpenSettings = { isSettingsOpen = true }
                 )
@@ -116,11 +120,9 @@ class MainActivity : ComponentActivity() {
                         currentLocation = currentLocation,
                         onLocationSelected = { newLocation ->
                             currentLocation = newLocation
+                            weatherController.selectLocation(newLocation)
                             locationPreferences.saveLocation(newLocation)
                             isSettingsOpen = false
-                            lifecycleScope.launch {
-                                fetchWeatherFor(newLocation)
-                            }
                         },
                         onDismiss = {
                             isSettingsOpen = false
@@ -129,13 +131,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-        }
-    }
-
-    private suspend fun fetchWeatherFor(location: SavedLocation) {
-        val result = weatherRepository.fetchWeather(location.latitude, location.longitude)
-        result.onSuccess { data ->
-            weatherData = data
         }
     }
 
@@ -173,6 +168,7 @@ private fun ClockScreen(
     weather: WeatherData?,
     location: SavedLocation?,
     onOpenSettings: () -> Unit,
+    weatherStatus: String = "",
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -269,6 +265,15 @@ private fun ClockScreen(
                         minFontSize = 14.sp,
                         maxFontSize = 36.sp
                     )
+                )
+            }
+            if (location != null && weatherStatus.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = weatherStatus,
+                    color = Color(0xFF909090),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
                 )
             } else if (location == null) {
                 Text(

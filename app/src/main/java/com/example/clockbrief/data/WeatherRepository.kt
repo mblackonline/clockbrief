@@ -1,6 +1,7 @@
 package com.example.clockbrief.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -39,7 +40,7 @@ data class GeocodingResult(
 class WeatherRepository {
 
     suspend fun searchCity(query: String): Result<List<GeocodingResult>> = withContext(Dispatchers.IO) {
-        runCatching {
+        cancellableResult {
             val encodedQuery = URLEncoder.encode(query.trim(), "UTF-8")
             val urlString =
                 "https://geocoding-api.open-meteo.com/v1/search?name=$encodedQuery&count=5&language=en&format=json"
@@ -68,7 +69,7 @@ class WeatherRepository {
 
     suspend fun fetchWeather(latitude: Double, longitude: Double): Result<WeatherData> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            cancellableResult {
                 val urlString =
                     "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
                             "&current=temperature_2m,weather_code" +
@@ -120,7 +121,7 @@ class WeatherRepository {
         return try {
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) {
-                throw IllegalStateException("HTTP error $responseCode from $urlString")
+                throw IllegalStateException("HTTP error $responseCode")
             }
             BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
                 reader.readText()
@@ -152,5 +153,13 @@ class WeatherRepository {
             96, 99 -> "Thunderstorm with Hail"
             else -> "Fair"
         }
+    }
+
+    private inline fun <T> cancellableResult(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        Result.failure(error)
     }
 }
