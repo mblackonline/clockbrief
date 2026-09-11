@@ -11,9 +11,17 @@ This software was developed with the assistance of AI tools.
 - Full-screen digital clock with tabular figures
 - Abbreviated day of the week and date
 - Live weather conditions, temperature, and daily highs/lows via Open-Meteo
+- Weather refresh every five minutes while the app is visible, with an immediate refresh on return
+- Last successful update age and automatic retries when weather is unavailable
 - In-app city search with private, local on-device preference storage
 - Display kept awake continuously while foregrounded
 - Optional accessibility service to automatically dismiss assistant overlays after 30 seconds
+
+The accessibility service checks the focused window's owner every half-second and
+dismisses the Google app after 30 seconds when it follows ClockBrief. This follows
+Assistant across changing windows. Switching to another app cancels the session.
+Android requires the window-content retrieval capability for these APIs; ClockBrief
+reads only the root node's package name, without reading text or traversing child views.
 
 ## Prerequisites
 
