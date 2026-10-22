@@ -73,9 +73,10 @@ class WeatherRepository {
                 val urlString =
                     "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
                             "&current=temperature_2m,weather_code" +
-                            "&daily=temperature_2m_max,temperature_2m_min" +
+                            "&daily=temperature_2m_max,sunrise,sunset" +
+                            "&hourly=temperature_2m" +
                             "&temperature_unit=fahrenheit" +
-                            "&timezone=auto&forecast_days=1"
+                            "&timezone=auto&forecast_days=2"
 
                 val responseString = httpGet(urlString)
                 val json = JSONObject(responseString)
@@ -89,12 +90,21 @@ class WeatherRepository {
                 if (json.has("daily")) {
                     val dailyObj = json.getJSONObject("daily")
                     val maxArr = dailyObj.optJSONArray("temperature_2m_max")
-                    val minArr = dailyObj.optJSONArray("temperature_2m_min")
                     if (maxArr != null && maxArr.length() > 0) {
-                        highTemp = maxArr.getDouble(0).roundToInt()
+                        highTemp = maxArr.optDouble(0).takeIf { it.isFinite() }?.roundToInt()
                     }
-                    if (minArr != null && minArr.length() > 0) {
-                        lowTemp = minArr.getDouble(0).roundToInt()
+                    val hourlyObj = json.optJSONObject("hourly")
+                    val hourlyTimes = hourlyObj?.optJSONArray("time")
+                    val hourlyTemps = hourlyObj?.optJSONArray("temperature_2m")
+                    if (hourlyTimes != null && hourlyTemps != null) {
+                        lowTemp = overnightLowF(
+                            sunset = dailyObj.optJSONArray("sunset")?.optString(0),
+                            sunrise = dailyObj.optJSONArray("sunrise")?.optString(1),
+                            hourlyTimes = List(hourlyTimes.length()) { hourlyTimes.getString(it) },
+                            hourlyTemperaturesF = List(hourlyTemps.length()) {
+                                hourlyTemps.optDouble(it).takeIf { value -> value.isFinite() }
+                            }
+                        )
                     }
                 }
 
