@@ -10,6 +10,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -72,23 +74,23 @@ class WeatherRepository {
             cancellableResult {
                 val urlString =
                     "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                            "&current=temperature_2m,weather_code" +
-                            "&daily=temperature_2m_max,sunrise,sunset" +
-                            "&hourly=temperature_2m" +
                             "&temperature_unit=fahrenheit" +
-                            "&timezone=auto&forecast_days=2"
+                            "&timezone=auto&timeformat=unixtime"
 
-                val responseString = httpGet(urlString)
-                val json = JSONObject(responseString)
+                val responses = fetchWeatherResponses(urlString, ::httpGet)
+                val json = JSONObject(responses.forecast)
 
-                val currentObj = json.getJSONObject("current")
+                val currentObj = JSONObject(responses.currentConditions).getJSONObject("current")
                 val currentTemp = currentObj.getDouble("temperature_2m").roundToInt()
                 val weatherCode = currentObj.getInt("weather_code")
+                val forecastZone = ZoneId.of(json.getString("timezone"))
 
                 var highTemp: Int? = null
                 var lowTemp: Int? = null
                 if (json.has("daily")) {
                     val dailyObj = json.getJSONObject("daily")
+                    val forecastDate = Instant.ofEpochSecond(dailyObj.getJSONArray("time").getLong(0))
+                        .atZone(forecastZone).toLocalDate()
                     val maxArr = dailyObj.optJSONArray("temperature_2m_max")
                     if (maxArr != null && maxArr.length() > 0) {
                         highTemp = maxArr.optDouble(0).takeIf { it.isFinite() }?.roundToInt()
@@ -98,9 +100,9 @@ class WeatherRepository {
                     val hourlyTemps = hourlyObj?.optJSONArray("temperature_2m")
                     if (hourlyTimes != null && hourlyTemps != null) {
                         lowTemp = overnightLowF(
-                            sunset = dailyObj.optJSONArray("sunset")?.optString(0),
-                            sunrise = dailyObj.optJSONArray("sunrise")?.optString(1),
-                            hourlyTimes = List(hourlyTimes.length()) { hourlyTimes.getString(it) },
+                            forecastDate = forecastDate,
+                            timeZone = forecastZone,
+                            hourlyTimes = List(hourlyTimes.length()) { hourlyTimes.getLong(it) },
                             hourlyTemperaturesF = List(hourlyTemps.length()) {
                                 hourlyTemps.optDouble(it).takeIf { value -> value.isFinite() }
                             }
@@ -131,7 +133,7 @@ class WeatherRepository {
         return try {
             val responseCode = connection.responseCode
             if (responseCode !in 200..299) {
-                throw IllegalStateException("HTTP error $responseCode")
+                throw WeatherHttpException(responseCode)
             }
             BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
                 reader.readText()

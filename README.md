@@ -18,9 +18,21 @@ This software was developed with the assistance of AI tools.
 - Display kept awake continuously while foregrounded
 - Optional accessibility service to automatically dismiss assistant overlays after 30 seconds
 
-Tonight's low is the minimum hourly forecast temperature from today's sunset through
-tomorrow's sunrise in the selected city's local time. The high/low pair is omitted
-when the overnight forecast or sunrise/sunset times are unavailable.
+Current temperature and conditions use Open-Meteo's default model selection.
+The high/low forecast uses NOAA's National Blend of Models (NBM) through Open-Meteo
+where available, with Open-Meteo's default forecast as a fallback outside NBM
+coverage. Current conditions are requested separately so the high/low model cannot
+change their source. Open-Meteo's current temperatures are model estimates and can
+differ from weather-station observations. No API key is required.
+The left temperature is today's forecast high. The right temperature is
+the minimum hourly forecast from 7 PM today through 7 AM tomorrow in the selected
+city's local standard time, following NOAA's forecast-verification convention.
+In Soddy-Daisy, that is 8 PM through 8 AM during daylight saving time, and 7 PM
+through 7 AM during standard time. Android's time-zone rules handle the changes
+automatically, including nights when the clocks change. The app uses Unix
+timestamps to distinguish repeated hours and does not depend on the tablet's
+time zone. The high/low pair is omitted when the overnight forecast is unavailable.
+Forecasts may differ from other weather providers.
 
 The accessibility service checks the focused window's owner every half-second and
 dismisses the Google app after 30 seconds when it follows ClockBrief. This follows

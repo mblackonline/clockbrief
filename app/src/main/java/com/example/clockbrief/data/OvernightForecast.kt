@@ -1,35 +1,33 @@
 package com.example.clockbrief.data
 
-import java.time.LocalDateTime
-import java.time.format.DateTimeParseException
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.roundToInt
 
-/** Uses forecast-location timestamps, independent of the device's time zone. */
+/** NOAA verification window: 7 PM through 7 AM in the forecast city's standard time. */
 internal fun overnightLowF(
-    sunset: String?,
-    sunrise: String?,
-    hourlyTimes: List<String>,
+    forecastDate: LocalDate,
+    timeZone: ZoneId,
+    hourlyTimes: List<Long>,
     hourlyTemperaturesF: List<Double?>
 ): Int? {
-    if (sunset == null || sunrise == null || hourlyTimes.size != hourlyTemperaturesF.size) {
-        return null
-    }
+    if (hourlyTimes.size != hourlyTemperaturesF.size) return null
 
-    return try {
-        val start = LocalDateTime.parse(sunset)
-        val end = LocalDateTime.parse(sunrise)
-        if (end <= start) return null
-
-        var minimum: Double? = null
-        for (index in hourlyTimes.indices) {
-            val time = LocalDateTime.parse(hourlyTimes[index])
-            if (time < start || time > end) continue
-            // Do not report a misleading minimum if an overnight sample is missing.
-            val temperature = hourlyTemperaturesF[index]?.takeIf { it.isFinite() } ?: return null
-            minimum = minimum?.let { minOf(it, temperature) } ?: temperature
-        }
-        minimum?.roundToInt()
-    } catch (_: DateTimeParseException) {
-        null
+    val start = standardTimeEpochSecond(forecastDate, 19, timeZone)
+    val end = standardTimeEpochSecond(forecastDate.plusDays(1), 7, timeZone)
+    var minimum: Double? = null
+    for (index in hourlyTimes.indices) {
+        val time = hourlyTimes[index]
+        if (time < start || time > end) continue
+        // Do not report a misleading minimum if an overnight sample is missing.
+        val temperature = hourlyTemperaturesF[index]?.takeIf { it.isFinite() } ?: return null
+        minimum = minimum?.let { minOf(it, temperature) } ?: temperature
     }
+    return minimum?.roundToInt()
+}
+
+private fun standardTimeEpochSecond(date: LocalDate, hour: Int, timeZone: ZoneId): Long {
+    val localTime = date.atTime(hour, 0)
+    val standardOffset = timeZone.rules.getStandardOffset(localTime.atZone(timeZone).toInstant())
+    return localTime.toEpochSecond(standardOffset)
 }
