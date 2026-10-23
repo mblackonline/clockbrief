@@ -18,7 +18,7 @@ See [CHANGELOG.md](CHANGELOG.md) for changes and validation history.
 - In-app city search with private, local on-device preference storage
 - Saved location preferences excluded from Android cloud backup and device transfer
 - Display kept awake continuously while foregrounded
-- Optional accessibility service to automatically dismiss assistant overlays after 30 seconds
+- Optional accessibility service to automatically dismiss assistant overlays after 90 seconds
 
 ## Weather sources and behavior
 
@@ -108,7 +108,7 @@ Service references: [National Weather Service API](https://www.weather.gov/docum
 ## Assistant dismissal
 
 The accessibility service checks the focused window's owner every half-second and
-dismisses the Google app after 30 seconds when it follows ClockBrief. This follows
+dismisses the Google app after 90 seconds when it follows ClockBrief. This follows
 Assistant across changing windows. Switching to another app cancels the session.
 Android requires the window-content retrieval capability for these APIs; ClockBrief
 reads only the root node's package name, without reading text or traversing child views.

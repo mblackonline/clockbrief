@@ -10,7 +10,7 @@ internal class AssistantDismissalPolicy {
     companion object {
         const val CLOCK_PACKAGE = "com.example.clockbrief"
         const val ASSISTANT_PACKAGE = "com.google.android.googlequicksearchbox"
-        const val DISMISS_AFTER_MS = 30_000L
+        const val DISMISS_AFTER_MS = 90_000L
     }
 
     private var clockHasFocus = false
