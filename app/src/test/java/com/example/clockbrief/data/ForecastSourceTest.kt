@@ -1,108 +1,66 @@
 package com.example.clockbrief.data
 
-import java.io.IOException
-import kotlinx.coroutines.CancellationException
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
-import org.junit.Assert.assertThrows
+import java.time.Instant
+import org.junit.Assert.*
 import org.junit.Test
 
 class ForecastSourceTest {
-    private val baseUrl = "https://api.open-meteo.com/v1/forecast?latitude=35.2359&longitude=-85.19079"
+    private val now = Instant.parse("2026-10-23T00:00:00Z")
 
-    @Test fun nbmHighLowDoesNotOverrideDefaultCurrentConditions() {
-        val requests = mutableListOf<String>()
-        val responses = fetchWeatherResponses(baseUrl) { url ->
-            requests += url
-            when {
-                "&current=" in url && "&models=" !in url -> "default current conditions"
-                "&current=" !in url && "&models=ncep_nbm_conus" in url -> "nbm high and low"
-                else -> throw AssertionError("Unexpected weather source")
-            }
-        }
-        assertEquals("default current conditions", responses.currentConditions)
-        assertEquals("nbm high and low", responses.forecast)
-        assertEquals(2, requests.size)
+    @Test fun convertsMeasuredAndForecastUnitsWithoutInventingMissingValues() {
+        assertEquals(71, temperatureF(21.6666667, "wmoUnit:degC"))
+        assertEquals(47, temperatureF(47.0, "F"))
+        assertEquals(32, temperatureF(0.0, "C"))
+        assertNull(temperatureF(null, "C"))
+        assertNull(temperatureF(Double.NaN, "C"))
+        assertNull(temperatureF(Double.POSITIVE_INFINITY, "F"))
+        assertNull(temperatureF(273.0, "unknown"))
     }
 
-    @Test fun unavailableCurrentConditionsCannotBeReplacedWithNbmCurrentTemperature() {
-        val error = IOException("current conditions unavailable")
-        val actual = assertThrows(IOException::class.java) {
-            fetchWeatherResponses(baseUrl) { url ->
-                if ("&current=" in url) throw error
-                "nbm forecast"
-            }
-        }
-        assertSame(error, actual)
+    @Test fun acceptsRecentObservationsAndRejectsOldOrFutureReadings() {
+        fun observation(time: Instant) = StationObservation(71, "Clear", time, "KCHA")
+        assertTrue(observation(now.minusSeconds(5_400)).isRecent(now))
+        assertFalse(observation(now.minusSeconds(5_401)).isRecent(now))
+        assertTrue(observation(now.plusSeconds(300)).isRecent(now))
+        assertFalse(observation(now.plusSeconds(301)).isRecent(now))
     }
 
-    @Test fun forecastCoverageFallbackKeepsCurrentConditionsOnDefaultSource() {
-        val requests = mutableListOf<String>()
-        val responses = fetchWeatherResponses(baseUrl) { url ->
-            requests += url
-            when {
-                "&models=ncep_nbm_conus" in url -> throw WeatherHttpException(400)
-                "&current=" in url -> "default current conditions"
-                else -> "default forecast"
-            }
-        }
-        assertEquals("default current conditions", responses.currentConditions)
-        assertEquals("default forecast", responses.forecast)
-        assertEquals(3, requests.size)
-        assertEquals(1, requests.count { "&current=" in it })
+    @Test fun stationDistanceExcludesDistantAirports() {
+        assertTrue(distanceKm(35.2359, -85.19079, 35.0353, -85.2038) < 50)
+        assertTrue(distanceKm(35.2359, -85.19079, 35.9513, -85.0851) > 50)
     }
 
-    @Test fun requestsNbmWithoutAnApiKey() {
-        val requests = mutableListOf<String>()
-        val response = fetchForecastResponse(baseUrl) { url ->
-            requests += url
-            "nbm forecast"
-        }
-        assertEquals("nbm forecast", response)
-        assertEquals(listOf("$baseUrl&models=ncep_nbm_conus"), requests)
+    @Test fun displaysPublishedForecastEvenWithoutCurrentObservationOrTodaysHigh() {
+        assertEquals("71° · Clear  (75° / 47°)", WeatherData(71, "Clear", 75, 47, "").displayLine())
+        assertEquals("Current unavailable  (75° / 47°)", WeatherData(null, "", 75, 47, "").displayLine())
+        assertEquals("71° · Clear  (— / 47°)", WeatherData(71, "Clear", null, 47, "").displayLine())
+        assertEquals("71°", WeatherData(71, "", null, null, "").displayLine())
     }
 
-    @Test fun usesDefaultModelWhenNbmDoesNotCoverTheLocation() {
-        val requests = mutableListOf<String>()
-        val response = fetchForecastResponse(baseUrl) { url ->
-            requests += url
-            if (requests.size == 1) throw WeatherHttpException(400)
-            "default forecast"
-        }
-        assertEquals("default forecast", response)
-        assertEquals(listOf("$baseUrl&models=ncep_nbm_conus", baseUrl), requests)
+    @Test fun showsObservationAgeSeparatelyFromRefreshAge() {
+        val state = WeatherRefreshState(
+            location = SavedLocation("City", 0.0, 0.0),
+            weather = WeatherData(71, "Clear", 75, 47, "", observedAtMillis = 0),
+            lastSuccessMillis = 3_000_000
+        )
+        assertTrue(state.statusText(3_000_000).contains("Updated just now"))
+        assertTrue(state.statusText(3_000_000).contains("Observed 50 min ago"))
     }
 
-    @Test fun doesNotHideServerErrorsOrMakeExtraRequests() {
-        var calls = 0
-        val error = WeatherHttpException(503)
-        val actual = assertThrows(WeatherHttpException::class.java) {
-            fetchForecastResponse(baseUrl) { calls++; throw error }
-        }
-        assertSame(error, actual)
-        assertEquals(1, calls)
+    @Test fun marksMissingCurrentObservationWhileForecastsAreAvailable() {
+        val state = WeatherRefreshState(
+            location = SavedLocation("City", 0.0, 0.0),
+            weather = WeatherData(null, "", 75, 47, ""),
+            lastSuccessMillis = 0
+        )
+        assertTrue(state.statusText(0).contains("Current observations unavailable"))
     }
 
-    @Test fun preservesNetworkFailureAndCancellation() {
-        for (error in listOf(IOException("offline"), CancellationException())) {
-            var calls = 0
-            val actual = assertThrows(error.javaClass) {
-                fetchForecastResponse(baseUrl) { calls++; throw error }
-            }
-            assertSame(error, actual)
-            assertEquals(1, calls)
-        }
-    }
-
-    @Test fun propagatesFallbackFailureWithoutRetryingAgain() {
-        var calls = 0
-        val actual = assertThrows(WeatherHttpException::class.java) {
-            fetchForecastResponse(baseUrl) {
-                calls++
-                throw WeatherHttpException(400)
-            }
-        }
-        assertEquals(400, actual.statusCode)
-        assertEquals(2, calls)
+    @Test fun describesAirportWeatherWithoutExposingReportCodes() {
+        assertEquals("Rain", aviationCondition("-RA", "OVC"))
+        assertEquals("Thunderstorm", aviationCondition("TSRA", "BKN"))
+        assertEquals("Clear", aviationCondition("", "CLR"))
+        assertEquals("Mostly Cloudy", aviationCondition("", "BKN"))
+        assertEquals("", aviationCondition("", "unknown"))
     }
 }

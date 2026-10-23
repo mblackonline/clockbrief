@@ -1,33 +1,33 @@
 package com.example.clockbrief.data
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import kotlin.math.roundToInt
 
-/** NOAA verification window: 7 PM through 7 AM in the forecast city's standard time. */
-internal fun overnightLowF(
-    forecastDate: LocalDate,
-    timeZone: ZoneId,
-    hourlyTimes: List<Long>,
-    hourlyTemperaturesF: List<Double?>
+internal data class ForecastPeriod(
+    val start: Instant,
+    val isDaytime: Boolean,
+    val temperatureF: Int?
+)
+
+internal data class ForecastMaximum(val start: Instant, val temperatureF: Int?)
+
+/** Use the published low for the night beginning today, not the preceding overnight period. */
+internal fun overnightLowF(periods: List<ForecastPeriod>, today: LocalDate, zone: ZoneId): Int? =
+    periods.filter { period ->
+        val start = period.start.atZone(zone)
+        !period.isDaytime && start.toLocalDate() == today && start.hour >= 12
+    }.minByOrNull { it.start }?.temperatureF
+
+internal fun todaysHighF(
+    maxima: List<ForecastMaximum>,
+    periods: List<ForecastPeriod>,
+    today: LocalDate,
+    zone: ZoneId
 ): Int? {
-    if (hourlyTimes.size != hourlyTemperaturesF.size) return null
-
-    val start = standardTimeEpochSecond(forecastDate, 19, timeZone)
-    val end = standardTimeEpochSecond(forecastDate.plusDays(1), 7, timeZone)
-    var minimum: Double? = null
-    for (index in hourlyTimes.indices) {
-        val time = hourlyTimes[index]
-        if (time < start || time > end) continue
-        // Do not report a misleading minimum if an overnight sample is missing.
-        val temperature = hourlyTemperaturesF[index]?.takeIf { it.isFinite() } ?: return null
-        minimum = minimum?.let { minOf(it, temperature) } ?: temperature
-    }
-    return minimum?.roundToInt()
-}
-
-private fun standardTimeEpochSecond(date: LocalDate, hour: Int, timeZone: ZoneId): Long {
-    val localTime = date.atTime(hour, 0)
-    val standardOffset = timeZone.rules.getStandardOffset(localTime.atZone(timeZone).toInstant())
-    return localTime.toEpochSecond(standardOffset)
+    // The grid can retain today's maximum after the daytime text period disappears.
+    return maxima.filter { it.start.atZone(zone).toLocalDate() == today }
+        .mapNotNull { it.temperatureF }.maxOrNull()
+        ?: periods.filter { it.isDaytime && it.start.atZone(zone).toLocalDate() == today }
+            .mapNotNull { it.temperatureF }.maxOrNull()
 }

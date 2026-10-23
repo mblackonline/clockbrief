@@ -65,7 +65,12 @@ class MainActivity : ComponentActivity() {
     private var isSettingsOpen by mutableStateOf(false)
 
     private val locationPreferences by lazy { LocationPreferences(this) }
-    private val weatherRepository = WeatherRepository()
+    private val weatherRepository by lazy {
+        WeatherRepository(
+            readHigh = locationPreferences::getForecastHigh,
+            writeHigh = locationPreferences::saveForecastHigh
+        )
+    }
     private val weatherController = WeatherRefreshController(
         fetchWeather = { location -> weatherRepository.fetchWeather(location.latitude, location.longitude) },
         log = { message -> Log.d("ClockBriefWeather", message) }
@@ -242,14 +247,7 @@ private fun ClockScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (weather != null) {
-                val weatherLine = buildString {
-                    append("${weather.currentTempF}°")
-                    append(" · ")
-                    append(weather.condition)
-                    if (weather.highTempF != null && weather.lowTempF != null) {
-                        append("  (${weather.highTempF}° / ${weather.lowTempF}°)")
-                    }
-                }
+                val weatherLine = weather.displayLine()
                 BasicText(
                     text = weatherLine,
                     modifier = Modifier.fillMaxWidth(),

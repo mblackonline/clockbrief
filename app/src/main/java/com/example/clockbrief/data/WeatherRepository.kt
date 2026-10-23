@@ -3,7 +3,10 @@ package com.example.clockbrief.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -11,18 +14,32 @@ import java.net.URL
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.Duration
 import java.util.Date
 import java.util.Locale
-import kotlin.math.roundToInt
+import java.util.concurrent.ConcurrentHashMap
 
 data class WeatherData(
-    val currentTempF: Int,
+    val currentTempF: Int?,
     val condition: String,
     val highTempF: Int?,
     val lowTempF: Int?,
-    val lastUpdated: String
-)
+    val lastUpdated: String,
+    val observedAtMillis: Long? = null,
+    val observationStation: String? = null
+) {
+    fun displayLine(): String = buildString {
+        append(currentTempF?.let { "$it°" } ?: "Current unavailable")
+        if (currentTempF != null && condition.isNotBlank()) append(" · $condition")
+        if (highTempF != null || lowTempF != null) {
+            val high = highTempF?.let { "$it°" } ?: "—"
+            val low = lowTempF?.let { "$it°" } ?: "—"
+            append("  ($high / $low)")
+        }
+    }
+}
 
 data class GeocodingResult(
     val name: String,
@@ -39,14 +56,30 @@ data class GeocodingResult(
         }
 }
 
-class WeatherRepository {
+class WeatherRepository(
+    private val request: (String) -> String = ::weatherHttpGet,
+    private val now: () -> Instant = Instant::now,
+    private val readHigh: (String, String) -> Int? = { _, _ -> null },
+    private val writeHigh: (String, String, Int) -> Unit = { _, _, _ -> }
+) {
+    private data class Station(val id: String, val distance: Double)
+    private data class Point(
+        val zone: ZoneId,
+        val forecastUrl: String,
+        val gridUrl: String,
+        val stations: List<Station>,
+        val expires: Instant
+    )
+
+    private val points = ConcurrentHashMap<String, Point>()
+    private val rememberedHighs = ConcurrentHashMap<String, Int>()
 
     suspend fun searchCity(query: String): Result<List<GeocodingResult>> = withContext(Dispatchers.IO) {
         cancellableResult {
             val encodedQuery = URLEncoder.encode(query.trim(), "UTF-8")
             val urlString =
                 "https://geocoding-api.open-meteo.com/v1/search?name=$encodedQuery&count=5&language=en&format=json"
-            val responseString = httpGet(urlString)
+            val responseString = request(urlString)
             val json = JSONObject(responseString)
 
             val results = mutableListOf<GeocodingResult>()
@@ -72,99 +105,139 @@ class WeatherRepository {
     suspend fun fetchWeather(latitude: Double, longitude: Double): Result<WeatherData> =
         withContext(Dispatchers.IO) {
             cancellableResult {
-                val urlString =
-                    "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                            "&temperature_unit=fahrenheit" +
-                            "&timezone=auto&timeformat=unixtime"
-
-                val responses = fetchWeatherResponses(urlString, ::httpGet)
-                val json = JSONObject(responses.forecast)
-
-                val currentObj = JSONObject(responses.currentConditions).getJSONObject("current")
-                val currentTemp = currentObj.getDouble("temperature_2m").roundToInt()
-                val weatherCode = currentObj.getInt("weather_code")
-                val forecastZone = ZoneId.of(json.getString("timezone"))
-
-                var highTemp: Int? = null
-                var lowTemp: Int? = null
-                if (json.has("daily")) {
-                    val dailyObj = json.getJSONObject("daily")
-                    val forecastDate = Instant.ofEpochSecond(dailyObj.getJSONArray("time").getLong(0))
-                        .atZone(forecastZone).toLocalDate()
-                    val maxArr = dailyObj.optJSONArray("temperature_2m_max")
-                    if (maxArr != null && maxArr.length() > 0) {
-                        highTemp = maxArr.optDouble(0).takeIf { it.isFinite() }?.roundToInt()
-                    }
-                    val hourlyObj = json.optJSONObject("hourly")
-                    val hourlyTimes = hourlyObj?.optJSONArray("time")
-                    val hourlyTemps = hourlyObj?.optJSONArray("temperature_2m")
-                    if (hourlyTimes != null && hourlyTemps != null) {
-                        lowTemp = overnightLowF(
-                            forecastDate = forecastDate,
-                            timeZone = forecastZone,
-                            hourlyTimes = List(hourlyTimes.length()) { hourlyTimes.getLong(it) },
-                            hourlyTemperaturesF = List(hourlyTemps.length()) {
-                                hourlyTemps.optDouble(it).takeIf { value -> value.isFinite() }
-                            }
+                val locationKey = "$latitude,$longitude"
+                val point = resolvePoint(locationKey, latitude, longitude)
+                val today = now().atZone(point.zone).toLocalDate()
+                currentCoroutineContext().ensureActive()
+                val periodsJson = nwsJson(point.forecastUrl).getJSONObject("properties")
+                    .getJSONArray("periods")
+                val periods = (0 until periodsJson.length()).mapNotNull { index ->
+                    optionalData {
+                        val period = periodsJson.getJSONObject(index)
+                        ForecastPeriod(
+                            start = OffsetDateTime.parse(period.getString("startTime")).toInstant(),
+                            isDaytime = period.getBoolean("isDaytime"),
+                            temperatureF = temperatureF(period.optDouble("temperature"), period.optString("temperatureUnit"))
                         )
                     }
                 }
-
-                val lastUpdated = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
-
+                val maxima = optionalData {
+                    val grid = nwsJson(point.gridUrl).getJSONObject("properties").getJSONObject("maxTemperature")
+                    val values = grid.getJSONArray("values")
+                    (0 until values.length()).mapNotNull { index ->
+                        optionalData {
+                            val value = values.getJSONObject(index)
+                            ForecastMaximum(
+                                OffsetDateTime.parse(value.getString("validTime").substringBefore('/')).toInstant(),
+                                temperatureF(value.optDouble("value"), grid.optString("uom"))
+                            )
+                        }
+                    }
+                }.orEmpty()
+                val highKey = "$locationKey|$today"
+                val freshHigh = todaysHighF(maxima, periods, today, point.zone)
+                if (freshHigh != null) {
+                    rememberedHighs[highKey] = freshHigh
+                    writeHigh(locationKey, today.toString(), freshHigh)
+                }
+                val high = freshHigh ?: rememberedHighs[highKey] ?: readHigh(locationKey, today.toString())
+                var observation: StationObservation? = null
+                for (station in point.stations) {
+                    currentCoroutineContext().ensureActive()
+                    val candidate = optionalData {
+                        val properties = nwsJson("https://api.weather.gov/stations/${station.id}/observations/latest")
+                            .getJSONObject("properties")
+                        val quantity = properties.getJSONObject("temperature")
+                        val temp = temperatureF(quantity.optDouble("value"), quantity.optString("unitCode"))
+                        temp?.let {
+                            StationObservation(
+                                temperatureF = it,
+                                description = properties.optString("textDescription").takeUnless { text -> text == "null" }.orEmpty(),
+                                observedAt = OffsetDateTime.parse(properties.getString("timestamp")).toInstant(),
+                                stationId = station.id
+                            )
+                        }
+                    }
+                    if (candidate != null && candidate.isRecent(now())) {
+                        observation = candidate
+                        break
+                    }
+                }
+                if (observation == null) {
+                    currentCoroutineContext().ensureActive()
+                    observation = aviationObservation(point.stations)
+                }
                 WeatherData(
-                    currentTempF = currentTemp,
-                    condition = parseWeatherCode(weatherCode),
-                    highTempF = highTemp,
-                    lowTempF = lowTemp,
-                    lastUpdated = lastUpdated
+                    currentTempF = observation?.temperatureF,
+                    condition = observation?.description.orEmpty(),
+                    highTempF = high,
+                    lowTempF = overnightLowF(periods, today, point.zone),
+                    lastUpdated = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date()),
+                    observedAtMillis = observation?.observedAt?.toEpochMilli(),
+                    observationStation = observation?.stationId
                 )
             }
         }
 
-    private fun httpGet(urlString: String): String {
-        val url = URL(urlString)
-        val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
-        connection.setRequestProperty("User-Agent", "ClockBrief/1.0 (Android)")
-
-        return try {
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw WeatherHttpException(responseCode)
-            }
-            BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
-                reader.readText()
-            }
-        } finally {
-            connection.disconnect()
+    private fun resolvePoint(key: String, latitude: Double, longitude: Double): Point {
+        points[key]?.takeIf { now() < it.expires }?.let { return it }
+        val properties = nwsJson("https://api.weather.gov/points/$latitude,$longitude").getJSONObject("properties")
+        val stations = optionalData {
+            val features = nwsJson(properties.getString("observationStations")).getJSONArray("features")
+            (0 until features.length()).mapNotNull { index ->
+                optionalData {
+                    val feature = features.getJSONObject(index)
+                    val coordinates = feature.getJSONObject("geometry").getJSONArray("coordinates")
+                    val id = feature.getJSONObject("properties").getString("stationIdentifier")
+                    require(id.matches(Regex("[A-Za-z0-9_-]+")))
+                    Station(id, distanceKm(latitude, longitude, coordinates.getDouble(1), coordinates.getDouble(0)))
+                }
+            }.filter { it.distance <= 50.0 }.sortedBy { it.distance }.take(5)
         }
+        val point = Point(
+            zone = ZoneId.of(properties.getString("timeZone")),
+            forecastUrl = properties.getString("forecast"),
+            gridUrl = properties.getString("forecastGridData"),
+            stations = stations.orEmpty(),
+            expires = now().plus(Duration.ofHours(6))
+        )
+        // Retry station discovery next refresh when the station endpoint failed.
+        if (stations != null) points[key] = point
+        return point
     }
 
-    private fun parseWeatherCode(code: Int): String {
-        return when (code) {
-            0 -> "Clear"
-            1 -> "Mainly Clear"
-            2 -> "Partly Cloudy"
-            3 -> "Overcast"
-            45, 48 -> "Fog"
-            51, 53, 55 -> "Drizzle"
-            56, 57 -> "Freezing Drizzle"
-            61, 63 -> "Rain"
-            65 -> "Heavy Rain"
-            66, 67 -> "Freezing Rain"
-            71, 73 -> "Snow"
-            75 -> "Heavy Snow"
-            77 -> "Snow Grains"
-            80, 81 -> "Showers"
-            82 -> "Heavy Showers"
-            85, 86 -> "Snow Showers"
-            95 -> "Thunderstorm"
-            96, 99 -> "Thunderstorm with Hail"
-            else -> "Fair"
+    private fun nwsJson(url: String): JSONObject {
+        val target = URL(url)
+        require(target.protocol == "https" && target.host == "api.weather.gov")
+        return JSONObject(request(url))
+    }
+
+    private fun aviationObservation(stations: List<Station>): StationObservation? {
+        val airportIds = stations.map { it.id }.filter { it.matches(Regex("[A-Z0-9]{4}")) }
+        if (airportIds.isEmpty()) return null
+        val observations = optionalData {
+            JSONArray(request("https://aviationweather.gov/api/data/metar?ids=${airportIds.joinToString(",")}&format=json"))
+        } ?: return null
+        val usable = (0 until observations.length()).mapNotNull { index ->
+            optionalData {
+                val item = observations.getJSONObject(index)
+                val id = item.getString("icaoId")
+                val temp = temperatureF(item.optDouble("temp"), "C")
+                if (id !in airportIds || temp == null) return@optionalData null
+                StationObservation(temp, aviationCondition(item.optString("wxString"), item.optString("cover")),
+                    Instant.ofEpochSecond(item.getLong("obsTime")), id).takeIf { it.isRecent(now()) }
+            }
         }
+        // Keep the station-distance order, independent of response array order.
+        return airportIds.firstNotNullOfOrNull { id -> usable.filter { it.stationId == id }.maxByOrNull { it.observedAt } }
+    }
+
+    private inline fun <T> optionalData(block: () -> T): T? = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
     }
 
     private inline fun <T> cancellableResult(block: () -> T): Result<T> = try {
@@ -173,5 +246,25 @@ class WeatherRepository {
         throw cancelled
     } catch (error: Exception) {
         Result.failure(error)
+    }
+}
+
+private fun weatherHttpGet(urlString: String): String {
+    val connection = URL(urlString).openConnection() as HttpURLConnection
+    connection.requestMethod = "GET"
+    connection.connectTimeout = 10_000
+    connection.readTimeout = 10_000
+    connection.setRequestProperty("User-Agent", "ClockBrief/1.0 (Android)")
+    connection.setRequestProperty("Accept", if (URL(urlString).host == "api.weather.gov") "application/geo+json" else "application/json")
+    return try {
+        val responseCode = connection.responseCode
+        if (responseCode !in 200..299) {
+            throw WeatherHttpException(responseCode)
+        }
+        BufferedReader(InputStreamReader(connection.inputStream)).use { reader ->
+            reader.readText()
+        }
+    } finally {
+        connection.disconnect()
     }
 }

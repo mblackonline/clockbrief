@@ -1,26 +1,55 @@
 package com.example.clockbrief.data
 
 import java.io.IOException
-import java.net.HttpURLConnection
+import java.time.Duration
+import java.time.Instant
+import kotlin.math.*
 
 internal class WeatherHttpException(val statusCode: Int) : IOException("HTTP error $statusCode")
 
-internal data class WeatherResponses(val currentConditions: String, val forecast: String)
+internal data class StationObservation(
+    val temperatureF: Int,
+    val description: String,
+    val observedAt: Instant,
+    val stationId: String
+)
 
-/** Model selection for high/low forecasts must never change the current conditions source. */
-internal fun fetchWeatherResponses(baseUrl: String, request: (String) -> String): WeatherResponses {
-    val forecast = fetchForecastResponse(
-        "$baseUrl&daily=temperature_2m_max&hourly=temperature_2m&forecast_days=2",
-        request
-    )
-    val current = request("$baseUrl&current=temperature_2m,weather_code")
-    return WeatherResponses(currentConditions = current, forecast = forecast)
+internal fun StationObservation.isRecent(now: Instant): Boolean {
+    val age = Duration.between(observedAt, now)
+    return age >= Duration.ofMinutes(-5) && age <= Duration.ofMinutes(90)
 }
 
-/** Prefer NOAA's blend; Open-Meteo returns HTTP 400 outside its coverage. */
-internal fun fetchForecastResponse(baseUrl: String, request: (String) -> String): String = try {
-    request("$baseUrl&models=ncep_nbm_conus")
-} catch (error: WeatherHttpException) {
-    if (error.statusCode != HttpURLConnection.HTTP_BAD_REQUEST) throw error
-    request(baseUrl)
+internal fun temperatureF(value: Double?, unit: String): Int? {
+    if (value == null || !value.isFinite()) return null
+    val fahrenheit = when (unit) {
+        "C", "wmoUnit:degC" -> value * 9.0 / 5.0 + 32.0
+        "F", "wmoUnit:degF" -> value
+        else -> return null
+    }
+    return fahrenheit.roundToInt()
+}
+
+internal fun aviationCondition(weather: String, sky: String): String = when {
+    "TS" in weather -> "Thunderstorm"
+    "SN" in weather -> "Snow"
+    "RA" in weather -> "Rain"
+    "DZ" in weather -> "Drizzle"
+    "FG" in weather -> "Fog"
+    "BR" in weather -> "Mist"
+    else -> when (sky) {
+        "CLR", "SKC", "CAVOK" -> "Clear"
+        "FEW" -> "Mainly Clear"
+        "SCT" -> "Partly Cloudy"
+        "BKN" -> "Mostly Cloudy"
+        "OVC" -> "Overcast"
+        else -> ""
+    }
+}
+
+internal fun distanceKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val latitudeDelta = Math.toRadians(lat2 - lat1)
+    val longitudeDelta = Math.toRadians(lon2 - lon1)
+    val a = sin(latitudeDelta / 2).pow(2) +
+        cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(longitudeDelta / 2).pow(2)
+    return 6371.0 * 2 * asin(sqrt(a.coerceIn(0.0, 1.0)))
 }

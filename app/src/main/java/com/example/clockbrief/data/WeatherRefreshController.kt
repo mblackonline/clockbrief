@@ -29,12 +29,21 @@ internal data class WeatherRefreshState(
         val message = when {
             hasError && weather == null -> "Weather unavailable · Retrying automatically"
             hasError -> "Weather may be outdated · Retrying automatically"
+            weather != null && weather.currentTempF == null -> "Current observations unavailable · Retrying automatically"
             isRefreshing && weather == null -> "Loading weather…"
             ageMinutes != null && ageMinutes >= 15 -> "Weather may be outdated"
             isRefreshing -> "Updating weather…"
             else -> ""
         }
-        return listOf(updated, message).filter { it.isNotEmpty() }.joinToString("\n")
+        val observed = weather?.observedAtMillis?.let { timestamp ->
+            val minutes = ((nowMillis - timestamp).coerceAtLeast(0) / 60_000)
+            when {
+                minutes == 0L -> "Observed just now"
+                minutes < 60 -> "Observed $minutes min ago"
+                else -> "Observed ${minutes / 60} hr ago"
+            }
+        }.orEmpty()
+        return listOf(updated, observed, message).filter { it.isNotEmpty() }.joinToString("\n")
     }
 }
 

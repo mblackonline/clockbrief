@@ -41,4 +41,18 @@ class LocationPreferences(context: Context) {
             .remove(KEY_LONGITUDE)
             .apply()
     }
+
+    fun getForecastHigh(locationKey: String, date: String): Int? {
+        if (prefs.getString("nws_high_location", null) != locationKey ||
+            prefs.getString("nws_high_date", null) != date || !prefs.contains("nws_high_temp")) return null
+        return prefs.getInt("nws_high_temp", 0)
+    }
+
+    fun saveForecastHigh(locationKey: String, date: String, high: Int) {
+        prefs.edit()
+            .putString("nws_high_location", locationKey)
+            .putString("nws_high_date", date)
+            .putInt("nws_high_temp", high)
+            .apply()
+    }
 }
